@@ -1,7 +1,9 @@
 import 'dart:io';
 
 import 'package:chat_app/widgets/user_image_picker.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 
 final _firebase = FirebaseAuth.instance;
@@ -21,6 +23,8 @@ class _AuthScreenState extends State<AuthScreen> {
   var _isLogin = true;
   var _enteredEmail = '';
   var _enteredPassword = '';
+  var _enteredUsername = '';
+  var _isAuthenticating = false;
   File? _selectedImage;
 
   String? _emailValidator(String? value) {
@@ -37,12 +41,26 @@ class _AuthScreenState extends State<AuthScreen> {
     return null;
   }
 
+  String? _usernameValidator(String? value) {
+    if (value == null || value.trim().isEmpty || value.trim().length < 4) {
+      return 'Please enter at least 4 characters long username.';
+    }
+    return null;
+  }
+
   void _signupHandler() async {
-    if (!_formKey.currentState!.validate()) {
+    if (!_formKey.currentState!.validate() ||
+        !_isLogin && _selectedImage == null) {
       return;
     }
+
     _formKey.currentState!.save();
+
     try {
+      setState(() {
+        _isAuthenticating = true;
+      });
+
       if (_isLogin) {
         final loggedInUserCredential =
             await _firebase.signInWithEmailAndPassword(
@@ -54,8 +72,30 @@ class _AuthScreenState extends State<AuthScreen> {
           email: _enteredEmail,
           password: _enteredPassword,
         );
+
+        final fileArr = _selectedImage.toString().split('.');
+        final fileExt = fileArr[fileArr.length - 1].replaceAll("'", '');
+        final storageRef = FirebaseStorage.instance
+            .ref()
+            .child('user_images')
+            .child('${userCredentials.user!.uid}.$fileExt');
+        await storageRef.putFile(_selectedImage!);
+        final imageUrl = await storageRef.getDownloadURL();
+
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(userCredentials.user!.uid)
+            .set({
+          'username': _enteredUsername,
+          'email': _enteredEmail,
+          'image_url': imageUrl,
+        });
       }
     } on FirebaseAuthException catch (error) {
+      setState(() {
+        _isAuthenticating = false;
+      });
+
       if (context.mounted) {
         ScaffoldMessenger.of(context).clearSnackBars();
         ScaffoldMessenger.of(context).showSnackBar(
@@ -99,7 +139,8 @@ class _AuthScreenState extends State<AuthScreen> {
                         children: [
                           if (!_isLogin)
                             UserImagePicker(
-                              onPickedImage: (pickedImage) {},
+                              onPickedImage: (pickedImage) =>
+                                  _selectedImage = pickedImage,
                             ),
                           TextFormField(
                             decoration: const InputDecoration(
@@ -115,6 +156,20 @@ class _AuthScreenState extends State<AuthScreen> {
                               }
                             },
                           ),
+                          if (!_isLogin)
+                            TextFormField(
+                              decoration: const InputDecoration(
+                                labelText: 'Username',
+                              ),
+                              enableSuggestions: false,
+                              autocorrect: false,
+                              validator: _usernameValidator,
+                              onSaved: (newValue) {
+                                if (newValue != null) {
+                                  _enteredUsername = newValue;
+                                }
+                              },
+                            ),
                           TextFormField(
                             decoration:
                                 const InputDecoration(labelText: 'Password'),
@@ -127,23 +182,27 @@ class _AuthScreenState extends State<AuthScreen> {
                             },
                           ),
                           const SizedBox(height: 12),
-                          ElevatedButton(
-                            onPressed: _signupHandler,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Theme.of(context)
-                                  .colorScheme
-                                  .primaryContainer,
+                          if (_isAuthenticating)
+                            const CircularProgressIndicator(),
+                          if (!_isAuthenticating)
+                            ElevatedButton(
+                              onPressed: _signupHandler,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Theme.of(context)
+                                    .colorScheme
+                                    .primaryContainer,
+                              ),
+                              child: Text(!_isLogin ? 'Signup' : 'Login'),
                             ),
-                            child: Text(!_isLogin ? 'Signup' : 'Login'),
-                          ),
-                          TextButton(
-                            onPressed: () {
-                              setState(() => _isLogin = !_isLogin);
-                            },
-                            child: Text(_isLogin
-                                ? 'Create an account'
-                                : 'I already have an account'),
-                          ),
+                          if (!_isAuthenticating)
+                            TextButton(
+                              onPressed: () {
+                                setState(() => _isLogin = !_isLogin);
+                              },
+                              child: Text(_isLogin
+                                  ? 'Create an account'
+                                  : 'I already have an account'),
+                            ),
                         ],
                       ),
                     ),
